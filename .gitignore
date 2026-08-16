@@ -1,0 +1,9 @@
+attackdna-env/
+data/raw/
+data/processed/
+models/
+models_lof/
+__pycache__/
+*.pyc
+.DS_Store
+
