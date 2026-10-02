@@ -2,20 +2,30 @@ import pandas as pd
 import re
 import sys
 
+from config import CFG
+
 SCAN_FEATURES = [
     "connections_per_minute", "distinct_ports_per_minute"
 ]
 
+# Timing/latency-related Argus fields (duration, inter-packet timing,
+# round-trip time, jitter). Verified against the actual GeNIS column
+# list, not ported blind from CICFlowMeter's names.
 TIMING_FEATURES = [
-    "Fwd IAT Std", "Bwd IAT Std", "Fwd IAT Min", "Bwd IAT Min",
-    "Idle Min", "Idle Std", "Active Min", "Active Std"
+    "Dur", "RunTime", "Mean", "Min", "Max", "Sum",
+    "TcpRtt", "SynAck", "AckDat",
+    "SIntPkt", "DIntPkt", "SIntPktMin", "SIntPktMax", "SIntPktAct",
+    "DIntPktMin", "DIntPktMax", "DIntPktAct", "SIntPktIdl",
+    "SrcJitter", "SrcJitAct", "DstJitter", "DstJitAct",
 ]
 
+# Volume-related Argus fields (bytes, packets, rate, loss).
 VOLUME_FEATURES = [
-    "Bwd Packet Length Std", "Bwd Packet Length Mean",
-    "Fwd Packet Length Std", "Fwd Packet Length Max",
-    "Packet Length Variance", "Packet Length Mean",
-    "FIN Flag Count"
+    "TotBytes", "SrcBytes", "DstBytes", "TotAppByte", "SAppBytes", "DAppBytes",
+    "TotPkts", "SrcPkts", "DstPkts",
+    "Rate", "SrcRate", "DstRate", "Load", "SrcLoad", "DstLoad",
+    "Loss", "SrcLoss", "DstLoss", "pLoss", "PCRatio",
+    "sMeanPktSz", "dMeanPktSz", "sMinPktSz", "dMinPktSz", "sMaxPktSz", "dMaxPktSz",
 ]
 
 
@@ -49,12 +59,6 @@ def map_to_mitre(explanation):
 
     timing_score = sum(z for f, z in features if f in TIMING_FEATURES)
     volume_score = sum(z for f, z in features if f in VOLUME_FEATURES)
-
-    if timing_score == 0 and volume_score == 0:
-        return ("T1499 - Network Denial of Service (general)",
-                "Anomalous behavior detected but does not match a "
-                "specific known DoS sub-pattern - recommend manual "
-                "analyst review.", timing_score, volume_score)
     scan_score = sum(z for f, z in features if f in SCAN_FEATURES)
 
     if scan_score > 0 and scan_score >= max(timing_score, volume_score):
@@ -62,6 +66,11 @@ def map_to_mitre(explanation):
                 f"High connection/port-diversity burst pattern - scan "
                 f"evidence ({scan_score:.1f}) dominates.",
                 timing_score, volume_score)
+    elif timing_score == 0 and volume_score == 0:
+        return ("T1499 - Network Denial of Service (general)",
+                "Anomalous behavior detected but does not match a "
+                "specific known DoS sub-pattern - recommend manual "
+                "analyst review.", timing_score, volume_score)
     elif timing_score > volume_score:
         return ("T1499.002 - Endpoint DoS: Service Exhaustion Flood",
                 f"Slow-rate resource exhaustion pattern - timing evidence "
@@ -79,6 +88,7 @@ def map_to_mitre(explanation):
 if __name__ == "__main__":
     input_path = sys.argv[1]
     output_path = sys.argv[2]
+    label_col = CFG["label_col"]
 
     print(f"Loading {input_path} ...")
     df = pd.read_csv(input_path)
@@ -106,4 +116,4 @@ if __name__ == "__main__":
     print(df["mitre_technique"].value_counts())
 
     print("\n--- Cross-check: MITRE mapping vs true attack label ---")
-    print(pd.crosstab(df["Label"], df["mitre_technique"]))
+    print(pd.crosstab(df[label_col], df["mitre_technique"]))

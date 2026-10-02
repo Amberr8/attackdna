@@ -6,22 +6,30 @@ import os
 from sklearn.ensemble import IsolationForest
 from sklearn.preprocessing import StandardScaler
 
+from config import CFG
 
 
 NON_FEATURE_COLUMNS = [
-    "Flow ID", "Source IP", "Destination IP", "Timestamp",
-    "Source Port", "Label", "entity",
-    # Zero variance - constant across all traffic, no information
-    "CWE Flag Count", "Fwd Avg Bulk Rate", "Bwd Avg Packets/Bulk",
-    "Bwd Avg Bulk Rate", "Bwd Avg Bytes/Bulk", "Bwd URG Flags",
-    "Fwd Avg Packets/Bulk", "Fwd Avg Bytes/Bulk", "Fwd URG Flags",
-    "Bwd PSH Flags",
-    # Redundant - correlation > 0.95 with a kept feature
-    "Total Backward Packets", "Total Length of Bwd Packets",
-    "Fwd IAT Total", "Fwd IAT Max", "Fwd IAT Min",
-    "Bwd IAT Total", "Bwd IAT Mean", "Fwd Packets/s",
-    "Max Packet Length", "SYN Flag Count", "ECE Flag Count",
-    "Average Packet Size"
+    CFG["src_ip_col"], CFG["dst_ip_col"], CFG["dport_col"],
+    CFG["label_col"], "entity", "row_id",
+    # Extra identity/label columns that exist in some datasets but not
+    # others; harmless to list even when absent.
+    "Flow ID", "Timestamp", "Source Port", "BinaryLabel", "SubCategoryLabel",
+    # Derived directly from the label column - would be pure label
+    # leakage if used as a training feature.
+    "frac_attack_in_bucket",
+    # Not statistically redundant, but not real behavioral signal either -
+    # dropped manually to avoid the model learning capture order / raw
+    # sequence numbers instead of genuine traffic behavior.
+    "Offset", "Seq",
+    # Redundant - correlation > 0.95 with a kept feature, or near-zero
+    # variance, computed from feature_selection.py on the GeNIS benign
+    # training baseline.
+    "AckDat", "DAppBytes", "DIntPktAct", "DIntPktMin", "DstBytes",
+    "DstLoss", "DstPkts", "Dur", "Loss", "Mean", "Min", "PCRatio",
+    "RunTime", "SIntPkt", "SIntPktAct", "SIntPktMin", "SrcLoad",
+    "SrcLoss", "SrcPkts", "SrcRate", "Sum", "SynAck", "TcpRtt",
+    "TotAppByte", "TotPkts", "pLoss", "sHops",
 ]
 
 def get_feature_columns(df):
@@ -70,7 +78,7 @@ def train_entity_model(entity_df, feature_cols, min_flows=10, target_fpr=0.05):
 
 def save_entity_model(entity_ip, model, scaler, threshold, feature_cols, out_dir="models"):
     os.makedirs(out_dir, exist_ok=True)
-    safe_name = entity_ip.replace(".", "_")
+    safe_name = str(entity_ip).replace(".", "_")
     path = os.path.join(out_dir, f"{safe_name}.pkl")
     bundle = {
         "model": model,
@@ -84,7 +92,7 @@ def save_entity_model(entity_ip, model, scaler, threshold, feature_cols, out_dir
     print(f"  Saved -> {path} (threshold={threshold:.4f})")
 
 if __name__ == "__main__":
-    input_paths = sys.argv[1:] if len(sys.argv) > 1 else ["data/processed/monday_clean.csv"]
+    input_paths = sys.argv[1:] if len(sys.argv) > 1 else ["data/processed/genis_train_clean.csv"]
     print(f"Loading baseline from {len(input_paths)} file(s)...")
 
     frames = []
@@ -95,8 +103,8 @@ if __name__ == "__main__":
         day_df = pd.read_csv(path)
         day_df.columns = day_df.columns.str.strip()
         before = len(day_df)
-        day_df = day_df[day_df["Label"] == "BENIGN"]
-        print(f"  {path}: {before} rows -> {len(day_df)} BENIGN rows")
+        day_df = day_df[day_df[CFG["label_col"]] == CFG["benign_value"]]
+        print(f"  {path}: {before} rows -> {len(day_df)} benign rows")
         frames.append(day_df)
 
     if not frames:
@@ -104,7 +112,7 @@ if __name__ == "__main__":
         sys.exit(1)
 
     df = pd.concat(frames, ignore_index=True)
-    print(f"Combined baseline: {len(df)} BENIGN rows, {df['entity'].nunique()} entities\n")
+    print(f"Combined baseline: {len(df)} benign rows, {df['entity'].nunique()} entities\n")
 
     feature_cols = get_feature_columns(df)
     print(f"Using {len(feature_cols)} feature columns.")

@@ -2,66 +2,94 @@ import pandas as pd
 import numpy as np
 import sys
 
+from config import CFG, DATASET
+
 
 def load_raw_csv(path):
     """Load the CSV and strip whitespace from column names.
-    CICIDS2017 CSVs have leading spaces in most headers, e.g.
-    ' Flow Duration' instead of 'Flow Duration'. Some files (notably
-    Thursday-Morning-WebAttacks) contain a non-UTF-8 byte (0x96) in
-    the Label column, so we read as latin1 - this maps every byte
-    1-to-1 to a character instead of failing, and keeps \x96 as the
-    literal character normalize_labels() already knows how to fix."""
-    df = pd.read_csv(path, low_memory=False, encoding="latin1")
+
+    CICIDS2017 needs latin1 encoding because some files (notably
+    Thursday-Morning-WebAttacks) contain a non-UTF-8 byte (0x96) in the
+    Label column. GeNIS's CSVs are already clean UTF-8, so use the
+    default encoding for it."""
+    if DATASET == "cicids2017":
+        df = pd.read_csv(path, low_memory=False, encoding="latin1")
+    else:
+        df = pd.read_csv(path, low_memory=False)
     df.columns = df.columns.str.strip()
     return df
 
 
-
-
 def extract_entity(df):
-    """Figure out which IP in each flow is the internal host, since
-    CICFlowMeter assigns Source/Destination based on who sent the first
-    packet - not based on internal vs external. So a given internal
-    host's traffic is split across both columns. We fix that by adding
-    an 'entity' column that always points to the internal host.
+    """Add an 'entity' column identifying which host each flow belongs to.
 
-    If both sides are internal (two internal hosts talking), the flow
-    is counted for both entities, since it's real traffic for both."""
-    internal_prefix = "192.168.10."
+    CICIDS2017: CICFlowMeter assigns Source/Destination based on who sent
+    the first packet, not internal vs external, so a given internal
+    host's traffic is split across both columns. We fix that by filtering
+    to the internal subnet and pointing 'entity' at whichever side is
+    internal.
 
-    src_internal = df["Source IP"].str.startswith(internal_prefix)
-    dst_internal = df["Destination IP"].str.startswith(internal_prefix)
+    GeNIS: Ssaddr/Sdaddr are anonymized integer host IDs inside a single
+    closed testbed. There is no internal/external subnet to filter on,
+    so every host ID is treated as its own entity.
 
-    src_rows = df[src_internal].copy()
-    src_rows["entity"] = src_rows["Source IP"]
+    In both cases, if both sides of a flow are the same kind of host
+    (both internal, or both inside the GeNIS testbed), the flow is
+    counted once for each participating entity, since it's genuine
+    traffic for both."""
+    src_col = CFG["src_ip_col"]
+    dst_col = CFG["dst_ip_col"]
 
-    dst_rows = df[dst_internal].copy()
-    dst_rows["entity"] = dst_rows["Destination IP"]
+    if CFG["internal_prefix"] is not None:
+        internal_prefix = CFG["internal_prefix"]
+        src_internal = df[src_col].astype(str).str.startswith(internal_prefix)
+        dst_internal = df[dst_col].astype(str).str.startswith(internal_prefix)
 
-    combined = pd.concat([src_rows, dst_rows], ignore_index=True)
+        src_rows = df[src_internal].copy()
+        src_rows["entity"] = src_rows[src_col]
 
-    dropped = len(df) - (src_internal | dst_internal).sum()
-    print(f"Dropped {dropped} flows with neither side internal.")
+        dst_rows = df[dst_internal].copy()
+        dst_rows["entity"] = dst_rows[dst_col]
+
+        combined = pd.concat([src_rows, dst_rows], ignore_index=True)
+
+        dropped = len(df) - (src_internal | dst_internal).sum()
+        print(f"Dropped {dropped} flows with neither side internal.")
+    else:
+        src_rows = df.copy()
+        src_rows["entity"] = src_rows[src_col]
+
+        dst_rows = df.copy()
+        dst_rows["entity"] = dst_rows[dst_col]
+
+        combined = pd.concat([src_rows, dst_rows], ignore_index=True)
+        print(f"No internal/external filtering for dataset '{DATASET}'; "
+              f"all {combined['entity'].nunique()} host IDs treated as entities.")
 
     return combined
 
 
 def clean_flow_stats(df):
-    """Fix inf and NaN values in the numeric columns. Flow Bytes/s and
-    Flow Packets/s can become 'inf' when Flow Duration is 0, since you
-    can't divide by zero - CICFlowMeter still writes 'inf' into the file
-    when that happens."""
+    """Fix inf and NaN values in the numeric columns. Some flow exporters
+    write 'inf' when a duration is 0 and a rate can't be computed."""
     numeric_cols = df.select_dtypes(include=[np.number]).columns
     df[numeric_cols] = df[numeric_cols].replace([np.inf, -np.inf], np.nan)
     before = len(df)
     df = df.dropna(subset=numeric_cols)
     print(f"Dropped {before - len(df)} rows with NaN/inf values.")
     return df
+
+
 def normalize_labels(df):
-    """Clean up the Label column - remove extra spaces and fix a known
-    broken character that shows up in some attack labels."""
-    df["Label"] = df["Label"].astype(str).str.strip().str.replace("\x96", "-", regex=False)
+    """Clean up the label column. CICIDS2017 also needs a known broken
+    character fixed; GeNIS's labels are already clean strings."""
+    label_col = CFG["label_col"]
+    df[label_col] = df[label_col].astype(str).str.strip()
+    if DATASET == "cicids2017":
+        df[label_col] = df[label_col].str.replace("\x96", "-", regex=False)
     return df
+
+
 def drop_duplicates(df):
     before = len(df)
     df = df.drop_duplicates()
@@ -69,21 +97,36 @@ def drop_duplicates(df):
     return df
 
 
+def cast_bool_columns(df):
+    """GeNIS's one-hot columns (Proto_tcp, State_CON, etc.) load as pandas
+    bool dtype. select_dtypes(include=[np.number]), used later in
+    train.py/feature_selection.py, silently excludes bool columns. If we
+    leave them as bool, train.py would train on fewer columns than
+    get_feature_columns() reports, and detect.py would then pass the
+    full column list at scoring time - a mismatch that breaks scoring.
+    Casting to int here keeps them numeric everywhere downstream."""
+    bool_cols = df.select_dtypes(include=["bool"]).columns
+    if len(bool_cols) > 0:
+        df[bool_cols] = df[bool_cols].astype(int)
+        print(f"Cast {len(bool_cols)} boolean columns to int: {list(bool_cols)}")
+    return df
+
 
 if __name__ == "__main__":
     input_path = sys.argv[1]
     output_path = sys.argv[2]
+
+    print(f"Dataset mode: {DATASET}")
     df = load_raw_csv(input_path)
     print(f"Loaded {len(df)} rows, {len(df.columns)} columns.")
     df = normalize_labels(df)
     df = drop_duplicates(df)
     df = extract_entity(df)
     df = clean_flow_stats(df)
+    df = cast_bool_columns(df)
     df["row_id"] = range(len(df))
     print(f"Final cleaned dataset: {len(df)} rows.")
     print(f"Unique entities: {df['entity'].nunique()}")
-    print(df["Label"].value_counts())
+    print(df[CFG["label_col"]].value_counts())
     df.to_csv(output_path, index=False)
     print(f"Saved to {output_path}")
-
-

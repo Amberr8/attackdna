@@ -4,9 +4,20 @@ import numpy as np
 from sklearn.ensemble import IsolationForest
 from sklearn.preprocessing import StandardScaler
 
+from config import CFG
+
+# Same drop list as train.py/train_lof.py.
 NON_FEATURE_COLUMNS = [
-    "Flow ID", "Source IP", "Destination IP", "Timestamp",
-    "Source Port", "Label", "entity", "row_id"
+    CFG["src_ip_col"], CFG["dst_ip_col"], CFG["dport_col"],
+    CFG["label_col"], "entity", "row_id",
+    "Flow ID", "Timestamp", "Source Port", "BinaryLabel", "SubCategoryLabel",
+    "Offset", "Seq",
+    "frac_attack_in_bucket",
+    "AckDat", "DAppBytes", "DIntPktAct", "DIntPktMin", "DstBytes",
+    "DstLoss", "DstPkts", "Dur", "Loss", "Mean", "Min", "PCRatio",
+    "RunTime", "SIntPkt", "SIntPktAct", "SIntPktMin", "SrcLoad",
+    "SrcLoss", "SrcPkts", "SrcRate", "Sum", "SynAck", "TcpRtt",
+    "TotAppByte", "TotPkts", "pLoss", "sHops",
 ]
 
 
@@ -14,7 +25,8 @@ def get_feature_columns(df):
     return [col for col in df.columns if col not in NON_FEATURE_COLUMNS]
 
 
-def train_and_score(baseline_df, test_df, feature_cols, seed, min_flows=100, target_fpr=0.05):
+def train_and_score(baseline_df, test_df, feature_cols, seed, label_col, benign_value,
+                     min_flows=100, target_fpr=0.05):
     """Train all entities with the given random seed, then score the
     test set and return network-wide TP/FP/FN/TN. Nothing is saved to
     disk - this is purely for measuring seed-to-seed stability."""
@@ -48,12 +60,12 @@ def train_and_score(baseline_df, test_df, feature_cols, seed, min_flows=100, tar
         test_scores = model.decision_function(X_test)
         predicted = np.where(test_scores < threshold, -1, 1)
 
-        result = test_entity[["Label"]].copy()
+        result = test_entity[[label_col]].copy()
         result["predicted"] = predicted
         all_predictions.append(result)
 
     all_df = pd.concat(all_predictions, ignore_index=True)
-    is_attack = all_df["Label"] != "BENIGN"
+    is_attack = all_df[label_col] != benign_value
     is_flagged = all_df["predicted"] == -1
 
     tp = (is_attack & is_flagged).sum()
@@ -72,23 +84,27 @@ if __name__ == "__main__":
     baseline_paths = sys.argv[1].split(",")
     test_path = sys.argv[2]
     seeds = [1, 7, 21, 99, 123]
+    label_col = CFG["label_col"]
+    benign_value = CFG["benign_value"]
 
     print(f"Loading baseline from {len(baseline_paths)} file(s)...")
     frames = [pd.read_csv(p) for p in baseline_paths]
     baseline_df = pd.concat(frames, ignore_index=True)
-    baseline_df = baseline_df[baseline_df["Label"] == "BENIGN"]
-    print(f"Baseline: {len(baseline_df)} BENIGN rows")
+    baseline_df = baseline_df[baseline_df[label_col] == benign_value]
+    print(f"Baseline: {len(baseline_df)} benign rows")
 
     print(f"Loading test file: {test_path}")
     test_df = pd.read_csv(test_path)
     print(f"Test: {len(test_df)} rows\n")
 
     feature_cols = get_feature_columns(baseline_df)
+    print(f"Using {len(feature_cols)} feature columns.")
 
     results = []
     for seed in seeds:
         print(f"Training with seed={seed}...")
-        precision, recall, f1 = train_and_score(baseline_df, test_df, feature_cols, seed)
+        precision, recall, f1 = train_and_score(
+            baseline_df, test_df, feature_cols, seed, label_col, benign_value)
         print(f"  Precision={precision:.3f}  Recall={recall:.3f}  F1={f1:.3f}")
         results.append({"seed": seed, "precision": precision, "recall": recall, "f1": f1})
 
@@ -98,3 +114,4 @@ if __name__ == "__main__":
     print(f"\nPrecision: mean={results_df['precision'].mean():.3f}  std={results_df['precision'].std():.4f}")
     print(f"Recall:    mean={results_df['recall'].mean():.3f}  std={results_df['recall'].std():.4f}")
     print(f"F1:        mean={results_df['f1'].mean():.3f}  std={results_df['f1'].std():.4f}")
+

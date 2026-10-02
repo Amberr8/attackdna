@@ -4,11 +4,13 @@ import pickle
 import os
 import sys
 
+from config import CFG
+
 
 def load_entity_model(entity_ip, models_dir="models"):
     """Load a saved model+scaler+threshold bundle for one entity. Returns
     None if no model exists for this entity."""
-    safe_name = entity_ip.replace(".", "_")
+    safe_name = str(entity_ip).replace(".", "_")
     path = os.path.join(models_dir, f"{safe_name}.pkl")
 
     if not os.path.exists(path):
@@ -46,6 +48,7 @@ def score_entity(entity_df, bundle):
 
 if __name__ == "__main__":
     input_path = sys.argv[1]
+    label_col = CFG["label_col"]
 
     print(f"Loading {input_path} ...")
     df = pd.read_csv(input_path)
@@ -73,16 +76,20 @@ if __name__ == "__main__":
         print(f"Entity {entity_ip}: {len(scored_df)} flows, "
               f"{n_anomalies} flagged as anomalies.")
 
+    if not results:
+        print("\nNo entities were scored - no matching models found.")
+        sys.exit(1)
+
     all_results = pd.concat(results, ignore_index=True)
 
     print(f"\nRows skipped (no model): {no_model_count}")
     print(f"Total scored: {len(all_results)}")
 
     print("\n--- Detection results by true label ---")
-    summary = all_results.groupby("Label")["predicted"].apply(
+    summary = all_results.groupby(label_col)["predicted"].apply(
         lambda x: (x == -1).sum()
     )
-    total_by_label = all_results["Label"].value_counts()
+    total_by_label = all_results[label_col].value_counts()
 
     for label in total_by_label.index:
         flagged = summary.get(label, 0)
@@ -90,8 +97,6 @@ if __name__ == "__main__":
         print(f"{label}: {flagged}/{total} flagged as anomaly "
               f"({flagged/total:.1%})")
 
-
-
-    output_path = sys.argv[2] if len(sys.argv) > 2 else "data/processed/wednesday_scored.csv"
+    output_path = sys.argv[2] if len(sys.argv) > 2 else "data/processed/genis_test_scored.csv"
     all_results.to_csv(output_path, index=False)
     print(f"\nSaved scored results to {output_path}")

@@ -7,10 +7,22 @@ import time
 from sklearn.neighbors import LocalOutlierFactor
 from sklearn.preprocessing import StandardScaler
 
+from config import CFG
 
+# Same drop list as train.py, so Isolation Forest and LOF are compared
+# on identical features - required for a fair head-to-head comparison.
 NON_FEATURE_COLUMNS = [
-    "Flow ID", "Source IP", "Destination IP", "Timestamp",
-    "Source Port", "Label", "entity", "row_id"
+    CFG["src_ip_col"], CFG["dst_ip_col"], CFG["dport_col"],
+    CFG["label_col"], "entity", "row_id",
+    "Flow ID", "Timestamp", "Source Port", "BinaryLabel", "SubCategoryLabel",
+    "Offset", "Seq",
+    # Derived from the label - would be leakage if used as a feature.
+    "frac_attack_in_bucket",
+    "AckDat", "DAppBytes", "DIntPktAct", "DIntPktMin", "DstBytes",
+    "DstLoss", "DstPkts", "Dur", "Loss", "Mean", "Min", "PCRatio",
+    "RunTime", "SIntPkt", "SIntPktAct", "SIntPktMin", "SrcLoad",
+    "SrcLoss", "SrcPkts", "SrcRate", "Sum", "SynAck", "TcpRtt",
+    "TotAppByte", "TotPkts", "pLoss", "sHops",
 ]
 
 
@@ -29,7 +41,9 @@ def train_entity_lof(entity_df, feature_cols, min_flows=100, target_fpr=0.05,
         print(f"  Skipping - only {len(entity_df)} flows (need {min_flows}+).")
         return None, None, None
 
-    shuffled = entity_df.sample(frac=1, random_state=42)
+    X_df = entity_df[feature_cols].replace([np.inf, -np.inf], np.nan).fillna(0)
+
+    shuffled = X_df.sample(frac=1, random_state=42)
     if len(shuffled) > max_train_rows:
         print(f"  Capping training rows: {len(shuffled)} -> {max_train_rows}")
         shuffled = shuffled.iloc[:max_train_rows]
@@ -38,8 +52,8 @@ def train_entity_lof(entity_df, feature_cols, min_flows=100, target_fpr=0.05,
     train_df = shuffled.iloc[:split_point]
     val_df = shuffled.iloc[split_point:]
 
-    X_train = train_df[feature_cols].values
-    X_val = val_df[feature_cols].values
+    X_train = train_df.values
+    X_val = val_df.values
 
     scaler = StandardScaler()
     X_train_scaled = scaler.fit_transform(X_train)
@@ -60,7 +74,7 @@ def train_entity_lof(entity_df, feature_cols, min_flows=100, target_fpr=0.05,
 
 def save_entity_model(entity_ip, model, scaler, threshold, feature_cols, out_dir="models_lof"):
     os.makedirs(out_dir, exist_ok=True)
-    safe_name = entity_ip.replace(".", "_")
+    safe_name = str(entity_ip).replace(".", "_")
     path = os.path.join(out_dir, f"{safe_name}.pkl")
 
     bundle = {
@@ -73,16 +87,18 @@ def save_entity_model(entity_ip, model, scaler, threshold, feature_cols, out_dir
 
 
 if __name__ == "__main__":
-    input_paths = sys.argv[1:] if len(sys.argv) > 1 else ["data/processed/monday_tw.csv"]
+    input_paths = sys.argv[1:] if len(sys.argv) > 1 else ["data/processed/genis_train_tw.csv"]
+    label_col = CFG["label_col"]
+    benign_value = CFG["benign_value"]
 
     print(f"Loading baseline from {len(input_paths)} file(s)...")
     frames = []
     for path in input_paths:
         day_df = pd.read_csv(path)
-        day_df = day_df[day_df["Label"] == "BENIGN"]
+        day_df = day_df[day_df[label_col] == benign_value]
         frames.append(day_df)
     df = pd.concat(frames, ignore_index=True)
-    print(f"Combined baseline: {len(df)} BENIGN rows, {df['entity'].nunique()} entities\n")
+    print(f"Combined baseline: {len(df)} benign rows, {df['entity'].nunique()} entities\n")
 
     feature_cols = get_feature_columns(df)
     print(f"Using {len(feature_cols)} feature columns.")

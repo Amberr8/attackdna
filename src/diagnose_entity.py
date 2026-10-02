@@ -1,23 +1,28 @@
 import pandas as pd
 import sys
 
-entity = "192.168.10.25"
+from config import CFG
 
-baseline_files = [
-    "data/processed/monday_tw.csv",
-    "data/processed/tuesday_tw.csv",
-    "data/processed/thursday_morning_tw.csv",
-    "data/processed/thursday_afternoon_tw.csv",
-]
-attack_file = "data/processed/wednesday_tw.csv"
+label_col = CFG["label_col"]
+benign_value = CFG["benign_value"]
 
+# Usage: python3 diagnose_entity.py <baseline_file1,baseline_file2,...> <attack_file> [entity]
+baseline_files = sys.argv[1].split(",")
+attack_file = sys.argv[2]
+entity_arg = sys.argv[3] if len(sys.argv) > 3 else CFG["default_target_entity"]
 
-print(f"--- {entity} BASELINE (training, BENIGN only) ---")
-baseline = pd.concat([pd.read_csv(f) for f in baseline_files], ignore_index=True)
-baseline = baseline[(baseline["entity"] == entity) & (baseline["Label"] == "BENIGN")]
+baseline_all = pd.concat([pd.read_csv(f) for f in baseline_files], ignore_index=True)
+entity_dtype = baseline_all["entity"].dtype
+try:
+    entity = entity_dtype.type(entity_arg)
+except (ValueError, TypeError):
+    entity = entity_arg
+
+print(f"--- Entity {entity} BASELINE (training, benign only) ---")
+baseline = baseline_all[(baseline_all["entity"] == entity) & (baseline_all[label_col] == benign_value)]
 print(baseline[["connections_per_minute", "distinct_ports_per_minute"]].describe())
 
-print(f"\n--- {entity} DURING PORTSCAN ATTACK ---")
+print(f"\n--- Entity {entity} DURING ATTACK TRAFFIC ---")
 attack = pd.read_csv(attack_file)
 attack_entity = attack[attack["entity"] == entity]
-print(attack_entity.groupby("Label")[["connections_per_minute", "distinct_ports_per_minute"]].describe())
+print(attack_entity.groupby(label_col)[["connections_per_minute", "distinct_ports_per_minute"]].describe())

@@ -2,10 +2,18 @@ import pandas as pd
 import numpy as np
 import sys
 
+from config import CFG
+
+label_col = CFG["label_col"]
+benign_value = CFG["benign_value"]
 
 NON_FEATURE_COLUMNS = [
-    "Flow ID", "Source IP", "Destination IP", "Timestamp",
-    "Source Port", "Label", "entity", "predicted", "anomaly_score"
+    CFG["src_ip_col"], CFG["dst_ip_col"], CFG["dport_col"],
+    label_col, "entity", "predicted", "anomaly_score",
+    "Flow ID", "Timestamp", "Source Port", "BinaryLabel", "SubCategoryLabel",
+    "row_id", "scan_flag", "final_flag",
+    # Derived from the label - would be leakage in an explanation too.
+    "frac_attack_in_bucket",
 ]
 
 
@@ -59,15 +67,10 @@ def explain_entity_batch(entity_df, feature_cols, mean_row, std_row, top_n=3):
 
 
 def compute_risk_score(anomaly_score, entity_criticality, mitre_severity, threat_intel=0):
-    """anomaly_score: normalized 0-100 (already have this).
-    entity_criticality: 0-100, you assign manually (e.g. web server=90, workstation=30).
-    mitre_severity: 0-100 from your existing MITRE mapping step.
-    threat_intel: 0-100, optional external feed score, default 0 if unavailable."""
     return (0.40 * anomaly_score +
             0.30 * entity_criticality +
             0.20 * mitre_severity +
             0.10 * threat_intel)
-
 
 
 if __name__ == "__main__":
@@ -77,7 +80,7 @@ if __name__ == "__main__":
     output_path = sys.argv[3]
     print(f"Loading baseline from {len(baseline_paths)} file(s)...")
     monday_df = pd.concat([pd.read_csv(p) for p in baseline_paths], ignore_index=True)
-    monday_df = monday_df[monday_df["Label"] == "BENIGN"]
+    monday_df = monday_df[monday_df[label_col] == benign_value]
 
     print(f"Loading scored data: {scored_path} ...")
     scored_df = pd.read_csv(scored_path)
@@ -113,5 +116,5 @@ if __name__ == "__main__":
     print("\n--- Sample explanations ---")
     for i in range(min(5, len(anomalies))):
         row = anomalies.iloc[i]
-        print(f"\nEntity: {row['entity']} | True label: {row['Label']}")
+        print(f"\nEntity: {row['entity']} | True label: {row[label_col]}")
         print(f"  {row['explanation']}")

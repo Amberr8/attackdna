@@ -5,9 +5,11 @@ import os
 import sys
 import time
 
+from config import CFG
+
 
 def load_entity_model(entity_ip, models_dir="models_lof"):
-    safe_name = entity_ip.replace(".", "_")
+    safe_name = str(entity_ip).replace(".", "_")
     path = os.path.join(models_dir, f"{safe_name}.pkl")
     if not os.path.exists(path):
         return None
@@ -31,6 +33,7 @@ def score_entity(entity_df, bundle):
 if __name__ == "__main__":
     input_path = sys.argv[1]
     output_path = sys.argv[2] if len(sys.argv) > 2 else "data/processed/lof_scored.csv"
+    label_col = CFG["label_col"]
 
     print(f"Loading {input_path} ...")
     df = pd.read_csv(input_path)
@@ -54,14 +57,18 @@ if __name__ == "__main__":
         n_anomalies = (scored_df["predicted"] == -1).sum()
         print(f"Entity {entity_ip}: {len(scored_df)} flows, {n_anomalies} flagged.")
 
+    if not results:
+        print("\nNo entities were scored - no matching LOF models found.")
+        sys.exit(1)
+
     all_results = pd.concat(results, ignore_index=True)
     elapsed = time.time() - start
     print(f"\nScoring time: {elapsed:.1f}s")
     print(f"Rows skipped (no model): {no_model_count}")
 
     print("\n--- Detection results by true label ---")
-    summary = all_results.groupby("Label")["predicted"].apply(lambda x: (x == -1).sum())
-    total_by_label = all_results["Label"].value_counts()
+    summary = all_results.groupby(label_col)["predicted"].apply(lambda x: (x == -1).sum())
+    total_by_label = all_results[label_col].value_counts()
     for label in total_by_label.index:
         flagged = summary.get(label, 0)
         total = total_by_label[label]
