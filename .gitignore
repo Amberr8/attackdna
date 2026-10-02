@@ -7,3 +7,12 @@ __pycache__/
 *.pyc
 .DS_Store
 
+attackdna-env/
+data/processed/
+models/
+models_lof/
+__pycache__/
+*.pyc
+src/genis-60-sec-train.csv
+src/genis-60-sec-test.csv
+src/feature_selection_output.txt
